@@ -107,12 +107,41 @@ REDIRECT 方案的已知局限：sing-box `redirect` 入站**只支持 TCP**（�
 - sing-box remote 类型 rule-set 在断网时重启会**启动失败**（首次下载无缓存）→ 本方案坚持 local srs + 更新脚本（失败保持旧文件）
 - 蜂窝掉线期间 sing-box 可能反复重连出站——恢复后守护自动拉正，无需干预
 
+## 案例 10：重启后网关整体失效——service.d 根本不执行（U30 Pro B24 必看）
+
+**症状**：设备重启后 Google 彻底不通（国内站正常），sing-box、守护进程、iptables 劫持规则全部消失。部署当时一切正常，第一次重启才爆雷。
+
+**先看故障签名**（客户端 curl 一个被墙站，几秒定位）：
+
+| 表现 | 含义 |
+|---|---|
+| 秒失败（~0.1s，code 000） | 无劫持规则、流量直连裸奔被墙 RST；或规则在但 sing-box 没人监听 7893 |
+| 挂起超时（10s+，code 000） | 规则在、流量进了 sing-box，但代理出站不通（节点/蜂窝问题） |
+| 204 | 一切正常 |
+
+**诊断证据链**（确认是自启失效而非规则丢失）：
+
+```bash
+adb shell "su -c 'uptime'"                                                 # 设备刚重启过
+adb shell "su -c 'pidof sing-box; ps -ef | grep 99-singbox | grep -v grep'" # 全空
+adb shell "su -c 'iptables -t nat -S PREROUTING | grep SB_RD'"              # 无规则
+adb shell "su -c 'stat -c %y /data/adb/singbox/singbox.log'"                # 日志停在重启前
+```
+
+**根因**：U30 Pro B24 的 debug_ramdisk 精简 Magisk 只有 su 提权，没有模块/脚本基础设施——service.d、post-fs-data.d **从不执行**。判别法：`/data/adb/magisk/` 是否为空；或放一个 service.d 脚本开机 touch 时间戳文件，重启后看有没有被执行。设备上唯一可靠的开机 root 自启通道是 UFI-TOOLS App（开机以 root 拉起自身 files/ 下的 ufi_keep_alive.sh、socat、ttyd）。
+
+**修复**：按 deployment.md「开机自启」节——把启动钩子植入 `ufi_keep_alive.sh` 后 `chattr +i` 锁定。两个关键点：
+- App 每次开机用模板重写该文件，不锁 immutable 钩子会被还原（真实踩坑：首版钩子植入后一次重启即被还原）
+- App 私有目录改文件用 `cat >` 原地覆写保属主；`sed -i` 会重建文件把属主变 root
+
 ## 工具坑备忘
 
 | 坑 | 规避 |
 |---|---|
 | toybox sed 不支持 `0,/re/` | 复杂修改整文件重写推送，别硬 sed |
-| Git Bash 的 adb push 远端路径被 MSYS 转换 | 命令前加 `MSYS_NO_PATHCONV=1` |
+| Git Bash 的 adb push 远端路径被 MSYS 转换 | 命令前加 `MSYS_NO_PATHCONV=1`；仍失败（exit 127 无输出）时用管道法 `cat 本地 | adb shell "su -c 'cat > 远端'"` |
+| 企业 Windows 禁用本机 5037 端口（adb 报 10013） | adb 服务换端口：所有命令带 `-P 5038`（或任一空闲端口） |
+| 改 App 私有目录（/data/data/包名/files/）下的文件 | `cat >` 原地覆写保 inode/属主；`sed -i`/重传会重建文件把属主变 root，App 可能拒绝执行 |
 | Windows Store 的 python3/python 是假别名 stub | 探测后先 `-c pass` 真跑一次再信任 |
 | adb shell 单引号嵌套 | 用 `su -c 'sh -s' <<'EOF'` 传整段脚本 |
 | 单点 ssl 证书错误（curl exit 35）偶发 | 可能恰逢守护重挂规则的瞬间（-F 重建链），连续测三次再定性 |

@@ -30,7 +30,7 @@ root 就绪验证（三条全过才算过）：
 ```bash
 adb shell "su -c id"                              # 期望输出含 uid=0(root)
 adb shell "su -c 'ls -ld /data/adb'"              # 目录存在（drwxrwxrwx root root）
-adb shell "su -c 'mkdir -p /data/adb/service.d && echo OK'"   # Magisk 自启目录可用
+adb shell "su -c 'mkdir -p /data/adb/service.d && echo OK'"   # ⚠ 只证明目录可写，不证明开机会执行
 ```
 
 说明：U30 Pro B24 的 su 在 `/debug_ramdisk/su`（不在 PATH，示例中把 `su` 换成该全路径）；一般设备 `su` 即可。首次执行 su 时设备上会弹 Magisk 授权框，需点允许。
@@ -38,7 +38,7 @@ adb shell "su -c 'mkdir -p /data/adb/service.d && echo OK'"   # Magisk 自启目
 ### ② 电脑侧 adb
 
 - 设备开发者选项 → USB 调试已开启，USB 连接后 `adb devices` 能看到设备
-- Windows Git Bash 下 push 远端路径要加 `MSYS_NO_PATHCONV=1` 防止路径被 MSYS 转换
+- Windows Git Bash 下 push 远端路径要加 `MSYS_NO_PATHCONV=1` 防止路径被 MSYS 转换；个别环境加了前缀 push 仍失败（exit 127 无输出），改用管道法：`cat 本地文件 | adb shell "su -c 'cat > /data/local/tmp/远端文件名'"`
 - 没有 adb 的环境：U30 Pro 技能自带免安装 `tools/adb.exe` 可直接用
 
 ### ③ 一个可用的代理节点
@@ -75,7 +75,8 @@ adb shell "su -c 'mkdir -p /data/adb/singbox'"
 MSYS_NO_PATHCONV=1 adb push config.json /data/local/tmp/
 adb shell "su -c 'cp /data/local/tmp/config.json /data/adb/singbox/; chmod 644 /data/adb/singbox/config.json'"
 # tproxy_rules.sh / update_geosite.sh / 99-singbox.sh 同理；sh 文件 chmod +x
-# 99-singbox.sh 放 /data/adb/service.d/（Magisk service.d 开机自动执行）
+# 99-singbox.sh 放 /data/adb/service.d/（⚠ 完整版 Magisk 开机自动执行；
+# U30 Pro B24 精简 root 不执行 service.d，见下方「开机自启」节）
 ```
 
 ### 2. 获取节点信息并替换 config.json 占位符
@@ -111,7 +112,8 @@ adb shell "su -c 'pgrep -f sing-box && echo RUNNING; tail -5 /data/adb/singbox/s
 
 ```bash
 adb shell "su -c 'sh /data/adb/singbox/tproxy_rules.sh'"
-# 启动守护（重启设备后 Magisk 会自动跑 service.d，无需手动）
+# 启动守护（⚠ 完整版 Magisk 重启后自动跑 service.d；U30 Pro B24 精简 root 不执行 service.d，
+# 必须完成下方「开机自启」节，否则首次重启后网关全挂——见 troubleshooting.md 案例 10）
 adb shell "su -c 'setsid nohup sh /data/adb/service.d/99-singbox.sh >/dev/null 2>&1 < /dev/null &'"
 ```
 
@@ -130,6 +132,10 @@ curl -s -o /dev/null -w '%{http_code}' https://www.google.com/generate_204   # 2
 curl -s -o /dev/null -w '%{http_code} %{time_total}s' https://www.taobao.com # 200, 亚秒
 # ⑤ MTU 健康（大页传输不卡）
 curl -s -o /dev/null -w '%{time_total}s' https://www.jd.com                  # 波动应 <1s
+# ⑥ 重启实测（唯一能证明自启生效的方式，不可省略）：
+adb shell "su -c 'reboot'"    # 等约 2 分钟后重复 ③④，并确认守护进程在：
+adb shell "su -c 'ps -ef | grep -E \"99-singbox|sing-box\" | grep -v grep'"
+#    U30 Pro B24 上若进程全空 → service.d 没执行，按下方「开机自启」节修复
 ```
 
 设备侧验证（不依赖客户端）：
@@ -141,6 +147,36 @@ adb shell "su -c 'curl -s --socks5-hostname 127.0.0.1:2080 -o /dev/null \
 adb shell "su -c 'iptables-save | grep -E \"SB_RD|to-ports\"'"   # 规则在
 adb shell "su -c 'grep -E \"ERROR|outbound/trojan|outbound/vless\" /data/adb/singbox/singbox.log | tail -10'"
 ```
+
+## 开机自启（U30 Pro B24：service.d 不执行，挂 UFI-TOOLS App）
+
+实测结论：U30 Pro B24 的 debug_ramdisk 精简 Magisk **开机不执行 `/data/adb/service.d`**（`/data/adb/magisk/` 为空，无模块/脚本基础设施）。该机型唯一可靠的开机 root 自启通道是 UFI-TOOLS App（`com.minikano.f50_sms`）：开机后它以 root 拉起自身 files/ 下的 `ufi_keep_alive.sh`、socat、ttyd。
+
+两个拦路坑：
+1. App 每次开机用内置模板**重写** files/ 下所有脚本——直接把启动钩子写进 `ufi_keep_alive.sh` 会在下次开机被还原
+2. App 私有目录改文件必须用 `cat >` 原地覆写保 inode/属主（u0_aXXX）；`sed -i`/重传会把属主变 root
+
+方案：植入钩子 + `chattr +i` 锁定（实测 App 重写失败后仍会照常执行现有文件，真机重启验证通过）：
+
+```bash
+# 0) 备份原文件
+adb shell "su -c 'cp /data/data/com.minikano.f50_sms/files/ufi_keep_alive.sh /data/adb/singbox/ufi_keep_alive.sh.orig'"
+# 1) 在该脚本的 "keep-alive started" echo 行之后、while 死循环之前，插入：
+#    if ! pgrep -f 99-singbox.sh >/dev/null 2>&1; then
+#        nohup sh /data/adb/service.d/99-singbox.sh >> /data/adb/singbox/keepalive.log 2>&1 &
+#    fi
+#    （整文件本地改好后用管道法写入：cat 本地文件 | adb shell "su -c 'cat > .../ufi_keep_alive.sh'"）
+# 2) 锁 immutable，防 App 开机重写：
+adb shell "su -c 'chattr +i /data/data/com.minikano.f50_sms/files/ufi_keep_alive.sh'"
+# 3) 重启实测（等约 2 分钟）：
+adb shell "su -c 'reboot'"
+adb shell "su -c 'ps -ef | grep -E \"ufi_keep|99-singbox|sing-box\" | grep -v grep'"
+#    三个进程都在 + 客户端 Google 204 = 自启生效
+```
+
+解锁/回退：`su -c 'chattr -i .../ufi_keep_alive.sh'` 后可自由修改或还原备份。
+
+管理通道前提：`persist.adb.tcp.port=5555`（该机由 UFI-TOOLS App 的 `ADB_IP_ENABLED` 设置）让 WiFi adb 扛重启——锁文件实验即使失败也能远程救回。
 
 ## 日常运维
 

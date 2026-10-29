@@ -1,6 +1,6 @@
 ---
 name: u30pro-singbox-gateway
-version: "2026.10.29"
+version: "2026.10.29-2"
 description: 在已 root 的 Android 随身 WiFi / 随身路由（如中兴 U30 Pro / MU5358，或其他 Magisk root 的安卓设备）上部署 sing-box 实现透明代理网关（科学上网路由器）的完整方案：iptables REDIRECT 透明代理、DNS 劫持分流、geosite/geoip 规则集自动更新、Magisk service.d 守护进程、MTU/MSS 调优、IPv6 泄漏防护，以及"百度能上 Google 不通""国内站变慢"等经典故障的排查。当用户提到 随身WiFi 代理/随身WiFi 科学上网/sing-box 透明代理/随身路由翻墙/U30 Pro 跑代理/安卓设备做旁路由网关/MU5358 代理/singbox redirect iptables/DNS 劫持分流 等场景时必须触发。
 ---
 
@@ -19,9 +19,10 @@ description: 在已 root 的 Android 随身 WiFi / 随身路由（如中兴 U30 
    ```bash
    adb shell "su -c id"                              # 期望含 uid=0(root)
    adb shell "su -c 'ls -ld /data/adb'"              # 目录存在且可写
-   adb shell "su -c 'mkdir -p /data/adb/service.d'"  # service.d 可创建（Magisk 自启机制）
+   adb shell "su -c 'mkdir -p /data/adb/service.d'"  # ⚠ 目录可创建只证明可写，不证明开机会执行
    ```
-   注意：U30 Pro B24 的 su 是 `/debug_ramdisk/su`（不在 PATH，需写全路径）；其他设备通常 `su` 即可
+   注意：U30 Pro B24 的 su 是 `/debug_ramdisk/su`（不在 PATH，需写全路径）；其他设备通常 `su` 即可。
+   **U30 Pro B24 实测：debug_ramdisk 精简版 Magisk 只有 su，开机不执行 service.d**（坑 13）——该机型开机自启必须按 deployment.md「开机自启」节挂到 UFI-TOOLS App 钩子，否则首次重启网关全挂
 3. **无 root 做不了的原因**：写 `/data/adb`、执行 iptables REDIRECT/TCPMSS（需 root 的 CAP_NET_ADMIN）、Magisk service.d 开机自启——全部需要 root。没有 root 本方案不成立，也不存在等效的免 root 透明代理替代
 4. **电脑侧 adb 可用**：设备 USB 调试已开、`adb devices` 可见（Windows Git Bash 下 push 远端路径需加 `MSYS_NO_PATHCONV=1`）
 5. **一个可用代理节点**：协议（trojan/vless/...）、服务器域名、端口、密码/UUID
@@ -70,7 +71,7 @@ WiFi 客户端(手机/电脑) ──┐
 | `config.json` | `/data/adb/singbox/config.json` | sing-box 主配置（需改节点参数） |
 | `tproxy_rules.sh` | `/data/adb/singbox/tproxy_rules.sh` | iptables 规则（REDIRECT 模式·默认）：TCP REDIRECT + v4/v6 DNS 劫持 + MSS 钳制 |
 | `tproxy_rules_full.sh` | `/data/adb/singbox/tproxy_rules_full.sh` | iptables 规则（**TPROXY 模式·进阶**）：TCP+UDP 全透明 + v6，见 tproxy-upgrade.md |
-| `99-singbox.sh` | `/data/adb/service.d/99-singbox.sh` | Magisk 开机守护：起进程 + 30s 规则保活 + 每周更新规则集 |
+| `99-singbox.sh` | `/data/adb/service.d/99-singbox.sh` | 守护脚本：起进程 + 30s 规则保活 + 每周更新规则集（完整版 Magisk 开机自动执行；⚠ U30 Pro B24 精简 root 不执行 service.d，需按 deployment.md「开机自启」节挂 UFI-TOOLS App 钩子） |
 | `update_geosite.sh` | `/data/adb/singbox/update_geosite.sh` | 官方 srs 规则集下载校验原子替换 |
 
 部署/修改这些文件的操作见 `references/deployment.md`；故障排查见 `references/troubleshooting.md`（含真实案例库）。
@@ -84,12 +85,13 @@ WiFi 客户端(手机/电脑) ──┐
 | 国内网站变慢 / DNS 绕路 | 案例 3、4 |
 | 网页能开但大文件忽快忽慢 / 下载卡 | 案例 5（MTU 黑洞） |
 | 规则总丢 / 重启后失效 | 案例 2（守护与规则保活） |
+| 重启后网关彻底失效（进程/规则全没了） | 案例 10（service.d 不执行——U30 Pro B24 必看） |
 | 游戏/语音等 UDP 应用不走代理 | REDIRECT 方案已知局限 → `references/tproxy-upgrade.md` |
 | 想让 IPv6 也透明代理 / UDP 全代理 | 升级 TPROXY → `references/tproxy-upgrade.md` |
 | 设备自身断网 / ADB 管理通道断 | 案例 8（TUN 翻车——若用了 TUN 赶紧回退） |
 | 怎么验证某域名走了代理还是直连 | troubleshooting.md「诊断方法论」 |
 
-## 必须记住的十二个坑（血泪教训速查）
+## 必须记住的十三个坑（血泪教训速查）
 
 1. **geosite 语义**：自制 json 若把域名放 `domain`（精确匹配）键下，所有子域名都不命中——DNS 全绕国外。用官方 `.srs` 文件（天然 `domain_suffix` 语义）根治
 2. **DNS 劫持端口必须等于 dns-in 监听端口**（15353）。设备上 5353 常被系统 mdnsd 占用，劫持到它 = DNS 全灭
@@ -103,6 +105,7 @@ WiFi 客户端(手机/电脑) ──┐
 10. **TUN + auto_route 在 Android 禁用**：会劫持设备自身出站（netd 冲突 + 排除参数 Android 不可用），管理通道全断（案例 8）
 11. **REDIRECT 只能透明 TCP**：DNS 靠 53 端口劫持解决，但普通 UDP（QUIC/游戏/语音）不代理——需要 UDP 全代理就升级 TPROXY
 12. **判断慢在哪层**：`curl -w` 的 dns/tcp/tls/starttransfer/total 分段计时 + 「设备直连 vs mixed-in 代理」对照实验，是定位一切慢问题的黄金手段
+13. **Magisk service.d 在 U30 Pro B24 上不执行**：该机型的 debug_ramdisk 精简 root 只有 su，无模块/脚本基础设施（判别法：`/data/adb/magisk/` 是否为空）。开机自启唯一可靠通道是 UFI-TOOLS App 的 `ufi_keep_alive.sh`（植入钩子 + `chattr +i` 防 App 开机重写，见案例 10）；完整版 Magisk 设备不受此限
 
 ## 与其他技能的配合
 
