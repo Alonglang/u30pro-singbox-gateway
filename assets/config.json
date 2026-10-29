@@ -1,0 +1,71 @@
+{
+  "_comment": "sing-box 透明代理网关配置模板。部署前必改：<PROXY_SERVER> <PROXY_PORT> <PROXY_PASSWORD> 三处占位符；如节点非 trojan 请替换 outbounds[0] 为对应协议。本文件经真机验证(sing-box 1.x)。",
+  "log": { "level": "info", "timestamp": true },
+  "dns": {
+    "servers": [
+      { "type": "local", "tag": "cn-dns" },
+      { "type": "https", "tag": "proxy-dns", "server": "1.1.1.1", "detour": "proxy" }
+    ],
+    "rules": [
+      { "query_type": ["AAAA"], "action": "reject" },
+      { "domain": ["<PROXY_SERVER>"], "server": "cn-dns" },
+      { "rule_set": ["geosite-cn"], "server": "cn-dns" }
+    ],
+    "final": "proxy-dns"
+  },
+  "inbounds": [
+    {
+      "type": "redirect",
+      "tag": "redirect-in",
+      "listen": "::",
+      "listen_port": 7893
+    },
+    {
+      "type": "direct",
+      "tag": "dns-in",
+      "listen": "::",
+      "listen_port": 15353,
+      "network": "udp"
+    },
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "::",
+      "listen_port": 2080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "trojan", "tag": "proxy",
+      "server": "<PROXY_SERVER>", "server_port": <PROXY_PORT>,
+      "password": "<PROXY_PASSWORD>",
+      "tls": {
+        "enabled": true,
+        "server_name": "<PROXY_SERVER>",
+        "alpn": ["h2", "http/1.1"],
+        "utls": { "enabled": true, "fingerprint": "chrome" },
+        "insecure": false
+      }
+    },
+    { "type": "direct", "tag": "direct" }
+  ],
+  "route": {
+    "default_domain_resolver": "cn-dns",
+    "rules": [
+      { "action": "sniff" },
+      { "protocol": "dns", "action": "hijack-dns" },
+      { "ip_is_private": true, "outbound": "direct" },
+      { "rule_set": ["geosite-cn"], "outbound": "direct" },
+      { "rule_set": ["geoip-cn"], "outbound": "direct" }
+    ],
+    "rule_set": [
+      { "type": "local", "tag": "geosite-cn", "format": "binary", "path": "geosite-cn.srs" },
+      { "type": "local", "tag": "geoip-cn", "format": "binary", "path": "geoip-cn.srs" }
+    ],
+    "final": "proxy", "auto_detect_interface": true
+  },
+  "experimental": {
+    "clash_api": { "external_controller": "0.0.0.0:9090", "external_ui": "ui", "default_mode": "rule" },
+    "cache_file": { "enabled": true, "path": "cache.db" }
+  }
+}
