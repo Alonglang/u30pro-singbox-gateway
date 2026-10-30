@@ -10,7 +10,7 @@ until [ "$(getprop sys.boot_completed)" = "1" ]; do sleep 2; done
 sleep 10
 
 start_singbox() {
-    if ! pgrep -f "$base/sing-box" >/dev/null 2>&1; then
+    if ! pidof sing-box >/dev/null 2>&1; then
         > "$base/singbox.log"
         nohup "$base/sing-box" run -D "$base" -c "$base/config.json" >> "$base/singbox.log" 2>&1 &
         sleep 3
@@ -30,7 +30,7 @@ touch "$base/.geosite_last_update"
 while true; do
     sleep 30
     # sing-box 死了 → 先摘规则（直连保底）再重启
-    if ! pgrep -f "$base/sing-box" >/dev/null 2>&1; then
+    if ! pidof sing-box >/dev/null 2>&1; then
         sh "$base/tproxy_rules.sh" remove 2>/dev/null
         start_singbox
         sh "$base/tproxy_rules.sh" 2>/dev/null
