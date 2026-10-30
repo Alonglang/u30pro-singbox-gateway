@@ -106,6 +106,7 @@ REDIRECT 方案的已知局限：sing-box `redirect` 入站**只支持 TCP**（�
 - 守护进程死了（`pkill -f 99-singbox` 会连自己一起杀——匹配串出现在自己命令行里）。重启守护要分两步：先 pkill（单独一条命令），再 setsid nohup 启动
 - sing-box remote 类型 rule-set 在断网时重启会**启动失败**（首次下载无缓存）→ 本方案坚持 local srs + 更新脚本（失败保持旧文件）
 - 蜂窝掉线期间 sing-box 可能反复重连出站——恢复后守护自动拉正，无需干预
+- **手动重启 sing-box 必须让守护认得它**（真实案例：一夜翻车 1420 次）：守护若用 `pgrep -f /data/adb/singbox/sing-box`（绝对路径）判断存活，而手动重启时用了相对路径（`cd /data/adb/singbox && ./sing-box run ...`），pgrep 匹配失败 → 守护每 30s 走"死亡分支"：摘规则 → 启动新实例（端口被旧实例占着，秒死）→ 重挂规则。每次摘除窗口（约 3 秒）内新建连接直连裸奔被墙重置，表现为 ChatGPT 等长连接站点整夜 "Reconnecting... waiting for network"、curl 偶发 exit 35。**根治：守护存活检测一律用 `pidof sing-box`（按进程名匹配，与启动路径无关）**；手动重启后盯 30 秒确认 keepalive.log 不再增长
 
 ## 案例 10：重启后网关整体失效——service.d 根本不执行（U30 Pro B24 必看）
 
@@ -145,3 +146,4 @@ adb shell "su -c 'stat -c %y /data/adb/singbox/singbox.log'"                # �
 | Windows Store 的 python3/python 是假别名 stub | 探测后先 `-c pass` 真跑一次再信任 |
 | adb shell 单引号嵌套 | 用 `su -c 'sh -s' <<'EOF'` 传整段脚本 |
 | 单点 ssl 证书错误（curl exit 35）偶发 | 可能恰逢守护重挂规则的瞬间（-F 重建链），连续测三次再定性 |
+| 守护的 sing-box 存活检测 | 用 `pidof sing-box`（进程名），别用 `pgrep -f` 绝对路径——手动相对路径重启会让守护误判死亡、每 30s 摘挂规则（案例 9） |

@@ -1,6 +1,6 @@
 ---
 name: u30pro-singbox-gateway
-version: "2026.10.29-2"
+version: "2026.10.30"
 description: 在已 root 的 Android 随身 WiFi / 随身路由（如中兴 U30 Pro / MU5358，或其他 Magisk root 的安卓设备）上部署 sing-box 实现透明代理网关（科学上网路由器）的完整方案：iptables REDIRECT 透明代理、DNS 劫持分流、geosite/geoip 规则集自动更新、Magisk service.d 守护进程、MTU/MSS 调优、IPv6 泄漏防护，以及"百度能上 Google 不通""国内站变慢"等经典故障的排查。当用户提到 随身WiFi 代理/随身WiFi 科学上网/sing-box 透明代理/随身路由翻墙/U30 Pro 跑代理/安卓设备做旁路由网关/MU5358 代理/singbox redirect iptables/DNS 劫持分流 等场景时必须触发。
 ---
 
